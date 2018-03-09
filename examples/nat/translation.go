@@ -313,8 +313,15 @@ func (port *ipv4Port) handleARP(pkt *packet.Packet) uint {
 
 	// Check that someone is asking about MAC of my IP address and HW
 	// address is blank in request
-	if packet.BytesToIPv4(arp.TPA[0], arp.TPA[1], arp.TPA[2], arp.TPA[3]) != packet.SwapBytesUint32(port.Subnet.Addr) ||
-		arp.THA != [common.EtherAddrLen]byte{} {
+	if packet.BytesToIPv4(arp.TPA[0], arp.TPA[1], arp.TPA[2], arp.TPA[3]) != packet.SwapBytesUint32(port.Subnet.Addr) {
+		println("Warning! Got an ARP packet with target IPv4 address", StringIPv4Array(arp.TPA),
+			"different from IPv4 address on interface. Should be", StringIPv4Int(port.Subnet.Addr),
+			". ARP request ignored.")
+		return flowDrop
+	}
+	if arp.THA != [common.EtherAddrLen]byte{} {
+		println("Warning! Got an ARP packet with non-zero MAC address", StringMAC(arp.THA),
+			". ARP request ignored.")
 		return flowDrop
 	}
 
