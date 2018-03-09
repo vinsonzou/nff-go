@@ -51,9 +51,9 @@ func setIPv4TCPChecksum(pkt *packet.Packet, calculateChecksum, hWTXChecksum bool
 }
 
 func setIPv4ICMPChecksum(pkt *packet.Packet, calculateChecksum, hWTXChecksum bool) {
-	if CalculateChecksum {
+	if calculateChecksum {
 		l3 := pkt.GetIPv4NoCheck()
-		if HWTXChecksum {
+		if hWTXChecksum {
 			l3.HdrChecksum = 0
 			l2len := uint32(common.EtherLen)
 			if pkt.Ether.EtherType == common.VLANNumber {
