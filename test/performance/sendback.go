@@ -32,7 +32,7 @@ func main() {
 	dpdkLogLevel := *(flag.String("dpdk", "--log-level=0", "Passes an arbitrary argument to dpdk EAL"))
 	flag.Parse()
 
-	// Initialize NFF-GO library to use specified number of CPU cores
+	// Initialize NFF-GO library
 	config := flow.Config{
 		CPUList:  cores,
 		DPDKArgs: []string{dpdkLogLevel},
