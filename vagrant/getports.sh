@@ -39,19 +39,33 @@ then
 elif [ "${port_number}" == 2375 ]
 then
     hosts=""
+    np_hosts=""
     pp="da"
     for (( i=0; i<${number}; i++ ))
     do
         vm_name=${vm_prefix}${i}
-        config=$(vagrant ssh-config ${vm_name})
-        address=$(echo "$config" | grep HostName | cut -d " " -f 4)
-        port=$(echo "$config" | grep Port | cut -d " " -f 4)
+        if vagrant status | grep ${vm_name} | grep -q libvirt
+        then
+            config=$(vagrant ssh-config ${vm_name})
+            address=$(echo "${config}" | grep HostName | cut -d " " -f 4)
+            port=${port_number}
+        elif vagrant status | grep ${vm_name} | grep -q virtualbox
+        then
+            address=localhost
+            port=$(vagrant port --guest ${port_number} ${vm_name})
+        else
+            echo Unknown provider for VM ${vm_name}
+            break
+        fi
+
         echo export ${pp}${i}=${address}:${port}
         if (( i==0 ))
         then
             hosts=${address}:${port}
+            np_hosts=${address}
         else
             hosts=${hosts},${address}:${port}
+            np_hosts=${np_hosts},${address}
         fi
     done
 else
@@ -62,4 +76,5 @@ fi
 if [ "${port_number}" == 2375 ]
 then
     echo export NFF_GO_HOSTS=${hosts}
+    echo export no_proxy=\$no_proxy,${np_hosts}
 fi
