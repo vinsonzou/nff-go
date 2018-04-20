@@ -21,6 +21,8 @@ Vagrant.configure(2) do |config|
   vm_group_size = ENV.fetch('VM_GROUP_SIZE', 3).to_i
   vm_total_number = ENV.fetch("VM_TOTAL_NUMBER", 3).to_i
   vm_links_number = ENV.fetch("VM_LINKS_NUMBER", 2).to_i
+  vm_port_base = ENV.fetch("VM_TUNNEL_PORT_BASE", 12345).to_i
+  vm_second_port_base = vm_port_base + vm_links_number * vm_total_number
 
 #  config.vm.box = "ubuntu/xenial64"
   config.vm.box = "fedora/27-cloud-base"
@@ -114,9 +116,11 @@ SHELL
           node.vm.network "private_network",
                           auto_config: false,
                           virtualbox__intnet: "#{vm_name}-link-#{user}-#{i}-#{j}",
+                          :model_type => 'e1000',
                           :libvirt__forward_mode => 'none',
-                          :libvirt__tunnel_type => 'server',
-                          :libvirt__tunnel_port => 12345 + i * vm_links_number + j
+                          :libvirt__tunnel_type => 'udp',
+                          :libvirt__tunnel_local_port => vm_second_port_base + i * vm_links_number + j,
+                          :libvirt__tunnel_port => vm_port_base + i * vm_links_number + j
         end
       end
 
@@ -126,9 +130,11 @@ SHELL
           node.vm.network "private_network",
                           auto_config: false,
                           virtualbox__intnet: "#{vm_name}-link-#{user}-#{i + 1}-#{j}",
+                          :model_type => 'e1000',
                           :libvirt__forward_mode => 'none',
-                          :libvirt__tunnel_type => 'client',
-                          :libvirt__tunnel_port => 12345 + (i + 1) * vm_links_number + j
+                          :libvirt__tunnel_type => 'udp',
+                          :libvirt__tunnel_local_port => vm_port_base + (i + 1) * vm_links_number + j,
+                          :libvirt__tunnel_port => vm_second_port_base + (i + 1) * vm_links_number + j
         end
       end
     end
