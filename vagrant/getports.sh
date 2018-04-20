@@ -41,15 +41,16 @@ then
     hosts=""
     np_hosts=""
     pp="da"
+    status=$(vagrant status)
     for (( i=0; i<${number}; i++ ))
     do
         vm_name=${vm_prefix}${i}
-        if vagrant status | grep ${vm_name} | grep -q libvirt
+        if echo "${status}" | grep ${vm_name} | grep -q libvirt
         then
             config=$(vagrant ssh-config ${vm_name})
             address=$(echo "${config}" | grep HostName | cut -d " " -f 4)
             port=${port_number}
-        elif vagrant status | grep ${vm_name} | grep -q virtualbox
+        elif echo "${status}" | grep ${vm_name} | grep -q virtualbox
         then
             address=localhost
             port=$(vagrant port --guest ${port_number} ${vm_name})
