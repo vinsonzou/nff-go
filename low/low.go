@@ -19,7 +19,6 @@ package low
 import "C"
 
 import (
-	"encoding/hex"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -36,8 +35,8 @@ func DirectStop(pktsForFreeNumber int, buf []uintptr) {
 }
 
 // DirectSend sends one mbuf.
-func DirectSend(m *Mbuf, port uint8) bool {
-	return bool(C.directSend((*C.struct_rte_mbuf)(m), C.uint8_t(port)))
+func DirectSend(m *Mbuf, port uint16) bool {
+	return bool(C.directSend((*C.struct_rte_mbuf)(m), C.uint16_t(port)))
 }
 
 // Ring is a ring buffer for pointers
@@ -491,7 +490,7 @@ func FreeMempools() {
 	usedMempools = nil
 }
 
-func StopPort(port uint8) {
+func StopPort(port uint16) {
 	C.rte_eth_dev_stop(C.uint16_t(port))
 }
 
@@ -501,8 +500,7 @@ func GetPortsNumber() int {
 }
 
 // CreatePort initializes a new port using global settings and parameters.
-func CreatePort(port uint8, willReceive bool, sendQueuesNumber uint16, hwtxchecksum bool) error {
-	addr := make([]byte, C.ETHER_ADDR_LEN)
+func CreatePort(port uint16, willReceive bool, sendQueuesNumber uint16, promiscuous bool, hwtxchecksum bool) error {
 	var mempool *C.struct_rte_mempool
 	if willReceive {
 		mempool = C.createMempool(C.uint32_t(mbufNumberT), C.uint32_t(mbufCacheSizeT))
@@ -510,13 +508,11 @@ func CreatePort(port uint8, willReceive bool, sendQueuesNumber uint16, hwtxcheck
 	} else {
 		mempool = nil
 	}
-	if C.port_init(C.uint8_t(port), C.bool(willReceive), C.uint16_t(sendQueuesNumber),
-		mempool, (*C.struct_ether_addr)(unsafe.Pointer(&(addr[0]))), C._Bool(hwtxchecksum)) != 0 {
+	if C.port_init(C.uint16_t(port), C.bool(willReceive), C.uint16_t(sendQueuesNumber),
+		mempool, C._Bool(promiscuous), C._Bool(hwtxchecksum)) != 0 {
 		msg := common.LogError(common.Initialization, "Cannot init port ", port, "!")
 		return common.WrapWithNFError(nil, msg, common.FailToInitPort)
 	}
-	t := hex.Dump(addr)
-	common.LogDebug(common.Initialization, "Port", port, "MAC address:", t[10:27])
 	return nil
 }
 

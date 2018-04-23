@@ -33,6 +33,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 var openFlowsNumber = uint32(0)
 var ringName = 1
 var createdPorts []port
+var portsTable sync.Map
 var schedState *scheduler
 var vEach [10][burstSize]uint8
 
@@ -322,7 +324,8 @@ type port struct {
 	wasRequested   bool // has user requested any send/receive operations at this port
 	txQueuesNumber int16
 	willReceive    bool // will this port receive packets
-	port           uint8
+	port           uint16
+	MAC            [common.EtherAddrLen]uint8
 }
 
 // Config is a struct with all parameters, which user can pass to NFF-GO library
@@ -446,7 +449,7 @@ func SystemInit(args *Config) error {
 	common.LogTitle(common.Initialization, "------------***-------- Initializing ports -------***------------")
 	createdPorts = make([]port, low.GetPortsNumber(), low.GetPortsNumber())
 	for i := range createdPorts {
-		createdPorts[i].port = uint8(i)
+		createdPorts[i].port = uint16(i)
 	}
 	// Init scheduler
 	common.LogTitle(common.Initialization, "------------***------ Initializing scheduler -----***------------")
@@ -476,10 +479,12 @@ func SystemStart() error {
 	for i := range createdPorts {
 		if createdPorts[i].wasRequested {
 			if err := low.CreatePort(createdPorts[i].port, createdPorts[i].willReceive,
-				uint16(createdPorts[i].txQueuesNumber), hwtxchecksum); err != nil {
+				uint16(createdPorts[i].txQueuesNumber), true, hwtxchecksum); err != nil {
 				return err
 			}
 		}
+		createdPorts[i].MAC = GetPortMACAddress(createdPorts[i].port)
+		common.LogDebug(common.Initialization, "Port", createdPorts[i].port, "MAC address:", packet.MACToString(createdPorts[i].MAC))
 	}
 	// Timeout is needed for ports to start up. This way is used in pktgen.
 	// Pktgen also has checks for link status for all ports, but we compensate it
@@ -820,6 +825,17 @@ func SetMerger(InArray ...*Flow) (OUT *Flow, err error) {
 // GetPortMACAddress returns default MAC address of an Ethernet port.
 func GetPortMACAddress(port uint16) [common.EtherAddrLen]uint8 {
 	return low.GetPortMACAddress(port)
+}
+
+// GetPortMACAddress returns default MAC address of an Ethernet port.
+func SetIPForPort(port uint16, ip uint32) bool {
+	for i := range createdPorts {
+		if createdPorts[i].port == port && createdPorts[i].wasRequested {
+			portsTable.Store(ip, &createdPorts[i])
+			return true
+		}
+	}
+	return false
 }
 
 // Service functions for Flow
