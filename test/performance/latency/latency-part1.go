@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,9 +42,6 @@ var (
 
 	dstPort1 uint16 = 111
 	dstPort2 uint16 = 222
-
-	outport uint
-	inport  uint
 )
 
 var (
@@ -74,14 +70,6 @@ var (
 	count uint64
 )
 
-// CheckFatal is an error handling function
-func CheckFatal(err error) {
-	if err != nil {
-		fmt.Printf("checkfail: %+v\n", err)
-		os.Exit(1)
-	}
-}
-
 func main() {
 	flag.IntVar(&latNumber, "latNumber", latNumber, "number of packets, for which latency should be reported")
 	flag.IntVar(&bins, "bins", bins, "number of bins")
@@ -90,9 +78,9 @@ func main() {
 	flag.Uint64Var(&passedLimit, "passedLimit", passedLimit, "received/sent minimum ratio to pass test")
 	flag.Uint64Var(&packetSize, "packetSize", packetSize, "size of packet")
 
-	flag.UintVar(&outport, "outport", 0, "port for sender")
-	flag.UintVar(&inport, "inport", 1, "port for receiver")
-	dpdkLogLevel := *(flag.String("dpdk", "--log-level=0", "Passes an arbitrary argument to dpdk EAL"))
+	outport := uint16(*flag.Uint("outport", 0, "port for sender"))
+	inport := uint16(*flag.Uint("inport", 1, "port for receiver"))
+	dpdkLogLevel := *flag.String("dpdk", "--log-level=0", "Passes an arbitrary argument to dpdk EAL")
 
 	latencies = make(chan time.Duration)
 	stop = make(chan string)
@@ -108,34 +96,34 @@ func main() {
 	config := flow.Config{
 		DPDKArgs: []string{dpdkLogLevel},
 	}
-	CheckFatal(flow.SystemInit(&config))
+	flow.CheckFatal(flow.SystemInit(&config))
 	payloadSize = packetSize - servDataSize
 
 	// Create packet flow
 	outputFlow := flow.SetGenerator(generatePackets, nil)
 	outputFlow2, err := flow.SetPartitioner(outputFlow, 350, 350)
-	CheckFatal(err)
+	flow.CheckFatal(err)
 
-	CheckFatal(flow.SetSender(outputFlow, uint8(outport)))
-	CheckFatal(flow.SetSender(outputFlow2, uint8(outport)))
+	flow.CheckFatal(flow.SetSender(outputFlow, outport))
+	flow.CheckFatal(flow.SetSender(outputFlow2, outport))
 
 	// Create receiving flow and set a checking function for it
-	inputFlow, err := flow.SetReceiver(uint8(inport))
-	CheckFatal(err)
+	inputFlow, err := flow.SetReceiver(inport)
+	flow.CheckFatal(err)
 
 	// Calculate latency only for 1 of skipNumber packets.
 	latFlow, err := flow.SetPartitioner(inputFlow, skipNumber, 1)
-	CheckFatal(err)
+	flow.CheckFatal(err)
 
-	CheckFatal(flow.SetHandler(latFlow, checkPackets, nil))
-	CheckFatal(flow.SetHandler(inputFlow, countPackets, nil))
+	flow.CheckFatal(flow.SetHandler(latFlow, checkPackets, nil))
+	flow.CheckFatal(flow.SetHandler(inputFlow, countPackets, nil))
 
-	CheckFatal(flow.SetStopper(inputFlow))
-	CheckFatal(flow.SetStopper(latFlow))
+	flow.CheckFatal(flow.SetStopper(inputFlow))
+	flow.CheckFatal(flow.SetStopper(latFlow))
 
 	// Start pipeline
 	go func() {
-		CheckFatal(flow.SystemStart())
+		flow.CheckFatal(flow.SystemStart())
 	}()
 
 	// Wait until enough latencies calculated
