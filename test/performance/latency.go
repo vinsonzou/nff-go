@@ -9,36 +9,44 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/intel-go/nff-go/common"
 	"github.com/intel-go/nff-go/flow"
 	"github.com/intel-go/nff-go/packet"
 )
 
-// Latency test includes 2 parts:
+// This is 1 part of latency test
+// For 2 part can be any of perf_light, perf_main, perf_seq
 //
 // latency-part1:
 // This part of test generates packets, puts time of generation into packet
-// and send to port 0. Packets expected to be received back on 1 port. Received
-// flow is partitioned in 100000:1 relation. For this 1 packet latency is
+// and send.
+// Received flow is partitioned in skipNumber:1 relation. For this 1 packet latency is
 // calculated (current time minus time in packet) and then reported to channel.
-// Test is finished when number of reported latency measurements = latNumber
-//
-// latency-part2:
-// This part of test receives packets on 0 port and send it back to 1 port.
+// Test is finished when number of reported latency measurements == latNumber
 
 // These are default test settings. Can be modified with command line.
 var (
 	latNumber          = 500
-	bins               = 10
 	skipNumber  uint64 = 100000
 	speed       uint64 = 1000000
 	passedLimit uint64 = 80
 
 	packetSize   uint64 = 128
-	servDataSize uint64 = 46 // Ether + IPv4 + UDP + 4
+	servDataSize uint64 = common.EtherLen + common.IPv4MinLen + common.UDPLen + crcLen
+
+	outport uint16
+	inport  uint16
+
+	dpdkLogLevel = "--log-level=0"
+)
+
+const (
+	crcLen = 4
 
 	dstPort1 uint16 = 111
 	dstPort2 uint16 = 222
@@ -47,44 +55,39 @@ var (
 var (
 	// packetSize - servDataSize
 	payloadSize uint64
-
 	// Counters of sent packets
 	sentPackets uint64
 
 	// Received flow is partitioned in two flows. Each flow has separate packet counter:
 	// Counter of received packets, for which latency calculated
-	checkedPackets uint64
+	checkedPktsCount uint64
 	// Counter of other packets
-	packetCounter uint64
+	uncheckedPktsCount uint64
 
 	// Event is to notify when latNumber number of packets are received
 	testDoneEvent *sync.Cond
-
 	// Channel is used to report packet latencies
 	latencies chan time.Duration
 	// Channel to stop collecting latencies and print statistics
 	stop chan string
 	// Latency values are stored here for next processing
 	latenciesStorage []time.Duration
-
-	count uint64
 )
 
 func main() {
 	flag.IntVar(&latNumber, "latNumber", latNumber, "number of packets, for which latency should be reported")
-	flag.IntVar(&bins, "bins", bins, "number of bins")
 	flag.Uint64Var(&skipNumber, "skipNumber", skipNumber, "test calculates latency only for 1 of skipNumber packets")
 	flag.Uint64Var(&speed, "speed", speed, "speed of generator")
 	flag.Uint64Var(&passedLimit, "passedLimit", passedLimit, "received/sent minimum ratio to pass test")
 	flag.Uint64Var(&packetSize, "packetSize", packetSize, "size of packet")
-
-	outport := uint16(*flag.Uint("outport", 0, "port for sender"))
-	inport := uint16(*flag.Uint("inport", 1, "port for receiver"))
-	dpdkLogLevel := *flag.String("dpdk", "--log-level=0", "Passes an arbitrary argument to dpdk EAL")
+	outport = uint16(*flag.Uint("outport", 0, "port for sender"))
+	inport = uint16(*flag.Uint("inport", 1, "port for receiver"))
+	dpdkLogLevel = *(flag.String("dpdk", "--log-level=0", "Passes an arbitrary argument to dpdk EAL"))
+	flag.Parse()
 
 	latencies = make(chan time.Duration)
 	stop = make(chan string)
-	latenciesStorage = make([]time.Duration, 2*latNumber)
+	latenciesStorage = make([]time.Duration, latNumber)
 
 	go latenciesLogger(latencies, stop)
 
@@ -93,14 +96,14 @@ func main() {
 	testDoneEvent = sync.NewCond(&m)
 
 	// Initialize NFF-GO library
-	config := flow.Config{
-		DPDKArgs: []string{dpdkLogLevel},
+	if err := initDPDK(); err != nil {
+		fmt.Printf("fail: %+v\n", err)
 	}
-	flow.CheckFatal(flow.SystemInit(&config))
 	payloadSize = packetSize - servDataSize
 
 	// Create packet flow
-	outputFlow := flow.SetGenerator(generatePackets, nil)
+	outputFlow, err := flow.SetFastGenerator(generatePackets, speed, nil)
+	flow.CheckFatal(err)
 	outputFlow2, err := flow.SetPartitioner(outputFlow, 350, 350)
 	flow.CheckFatal(err)
 
@@ -111,7 +114,7 @@ func main() {
 	inputFlow, err := flow.SetReceiver(inport)
 	flow.CheckFatal(err)
 
-	// Calculate latency only for 1 of skipNumber packets.
+	// Calculate latency only for 1 of skipNumber packets
 	latFlow, err := flow.SetPartitioner(inputFlow, skipNumber, 1)
 	flow.CheckFatal(err)
 
@@ -132,14 +135,28 @@ func main() {
 	testDoneEvent.L.Unlock()
 
 	// Compose statistics
+	composeStatistics()
+}
+
+func initDPDK() error {
+	// Init NFF-GO system
+	config := flow.Config{
+		DPDKArgs: []string{dpdkLogLevel},
+	}
+	if err := flow.SystemInit(&config); err != nil {
+		return err
+	}
+	return nil
+}
+
+func composeStatistics() {
 	sent := atomic.LoadUint64(&sentPackets)
-	checked := atomic.LoadUint64(&checkedPackets)
-	ignored := atomic.LoadUint64(&packetCounter)
+	checked := atomic.LoadUint64(&checkedPktsCount)
+	ignored := atomic.LoadUint64(&uncheckedPktsCount)
 	received := checked + ignored
 
 	ratio := received * 100 / sent
 
-	// Print report
 	fmt.Println("Packet size", packetSize, "bytes")
 	fmt.Println("Requested speed", speed)
 	fmt.Println("Sent", sent, "packets")
@@ -147,10 +164,10 @@ func main() {
 	fmt.Println("Received/sent ratio =", ratio, "%")
 	fmt.Println("Checked", checked, "packets")
 
-	aver, stddev := statLatency(latenciesStorage)
-	fmt.Println("Average = ", aver)
-	fmt.Println("Stddev = ", stddev)
-	displayHist(latenciesStorage, bins)
+	stat := calcStats(latenciesStorage)
+	fmt.Println("Median = ", stat.median)
+	fmt.Println("Average = ", stat.average)
+	fmt.Println("Stddev = ", stat.stddev)
 
 	if ratio > passedLimit {
 		fmt.Println("TEST PASSED")
@@ -160,7 +177,6 @@ func main() {
 }
 
 func generatePackets(pkt *packet.Packet, context flow.UserContext) {
-	atomic.AddUint64(&count, 1)
 	if pkt == nil {
 		fmt.Println("TEST FAILED")
 		log.Fatal("Failed to create new packet")
@@ -169,17 +185,25 @@ func generatePackets(pkt *packet.Packet, context flow.UserContext) {
 		fmt.Println("TEST FAILED")
 		log.Fatal("Failed to init empty packet")
 	}
+	ipv4 := pkt.GetIPv4()
+	udp := pkt.GetUDPForIPv4()
 
 	// We need different packets to gain from RSS
-	if count%2 == 0 {
-		pkt.GetUDPForIPv4().DstPort = packet.SwapBytesUint16(dstPort1)
+	if atomic.LoadUint64(&sentPackets)%2 == 0 {
+		udp.DstPort = packet.SwapBytesUint16(dstPort1)
 	} else {
-		pkt.GetUDPForIPv4().DstPort = packet.SwapBytesUint16(dstPort2)
+		udp.DstPort = packet.SwapBytesUint16(dstPort2)
 	}
 
 	ptr := (*packetData)(pkt.Data)
 	ptr.SendTime = time.Now()
-	atomic.AddUint64(&sentPackets, 1)
+
+	ipv4.HdrChecksum = packet.SwapBytesUint16(packet.CalculateIPv4Checksum(ipv4))
+	udp.DgramCksum = packet.SwapBytesUint16(packet.CalculateIPv4UDPChecksum(ipv4, udp, pkt.Data))
+
+	if atomic.LoadUint64(&checkedPktsCount) < uint64(latNumber) {
+		atomic.AddUint64(&sentPackets, 1)
+	}
 }
 
 // This function take latencies from channel, and put values to array.
@@ -199,96 +223,64 @@ func latenciesLogger(ch <-chan time.Duration, stop <-chan string) {
 	}
 }
 
-// Count and check packets in received flow
+// Check packets in received flow, calculate latencies and put to chennel
 func checkPackets(pkt *packet.Packet, context flow.UserContext) {
-	checkCount := atomic.AddUint64(&checkedPackets, 1)
-
-	offset := pkt.ParseData()
-	if offset < 0 {
-		fmt.Printf("ParseData returned negative value:\noffset:%d,\n packet: %x\n", offset, pkt.GetRawPacketBytes())
+	checkCount := atomic.LoadUint64(&checkedPktsCount)
+	if pkt.ParseData() < 0 {
+		fmt.Println("Cannot parse Data, skip")
+	} else if checkCount >= uint64(latNumber) {
+		stop <- "stop"
 	} else {
 		ptr := (*packetData)(pkt.Data)
+		atomic.AddUint64(&checkedPktsCount, 1)
 		RecvTime := time.Now()
 		lat := RecvTime.Sub(ptr.SendTime)
 		// Report latency
 		latencies <- lat
 	}
-
-	if checkCount >= uint64(latNumber) {
-		stop <- "stop"
-	}
 }
 
 func countPackets(pkt *packet.Packet, context flow.UserContext) {
-	atomic.AddUint64(&packetCounter, 1)
+	atomic.AddUint64(&uncheckedPktsCount, 1)
 }
 
 type packetData struct {
+	PktLabel uint32
 	SendTime time.Time
 }
 
-// Display summary on calculated latencies
-func displayHist(times []time.Duration, maxBins int) {
-	min := time.Duration(1 << 10 * time.Second)
-	max := time.Duration(0)
-	for _, t := range times[0:latNumber] {
-		if t < min {
-			min = t
-		}
-		if t > max {
-			max = t
-		}
-	}
-
-	fmt.Println("min latency=", min)
-	fmt.Println("max latency=", max)
-
-	step := (max - min) / time.Duration(maxBins)
-
-	bounds := make([]time.Duration, maxBins+1)
-	bounds[0] = min - 1
-	for i := 1; i < maxBins+1; i++ {
-		bounds[i] = bounds[i-1] + step
-	}
-	bounds[maxBins] = max
-
-	// Count observations in each interval
-	histObs := make([]int, maxBins)
-	for i := 0; i < latNumber; i++ {
-		t := times[i]
-		for j := 1; j < maxBins+1; j++ {
-			if t > bounds[j-1] && t <= bounds[j] {
-				histObs[j-1]++
-			}
-		}
-	}
-	// Displaying latency intervals and counts
-	for i := 0; i < maxBins; i++ {
-		fmt.Printf("Interval %d: (%v, %v] count = %d - %v\n", i, bounds[i], bounds[i+1], histObs[i],
-			float32(histObs[i])/float32(latNumber))
-	}
+type latencyStat struct {
+	median  time.Duration
+	average time.Duration
+	stddev  time.Duration
 }
 
-// Calculate geomean for first latNumber observations
-func geomeanLatency(times []time.Duration) time.Duration {
-	g := math.Pow(float64(times[0]), 1/float64(latNumber))
-	for i := 1; i < latNumber; i++ {
-		g = g * math.Pow(float64(times[i]), 1/float64(latNumber))
-	}
-	return time.Duration(g)
-}
+// Calculate median, average and stddev
+func calcStats(times []time.Duration) (stat latencyStat) {
+	stat.median = median(times)
 
-// Calculate average and stddev for first latNumber observations
-func statLatency(times []time.Duration) (time.Duration, time.Duration) {
-	var g time.Duration
-	var s float64
+	g := time.Duration(0)
 	for i := 0; i < latNumber; i++ {
 		g += times[i]
 	}
-	aver := float64(int(g) / latNumber)
+	stat.average = time.Duration(int64(g) / int64(latNumber))
 
+	s := float64(0)
 	for i := 0; i < latNumber; i++ {
-		s += math.Pow(float64(times[i])-aver, 2)
+		s += math.Pow(float64(times[i])-float64(stat.average), 2)
 	}
-	return time.Duration(aver), time.Duration(math.Sqrt(s / float64(latNumber)))
+	stat.stddev = time.Duration(math.Sqrt(s / float64(latNumber)))
+	return
+}
+
+func median(arr []time.Duration) time.Duration {
+	len := len(arr)
+	tmp := make([]time.Duration, len)
+	copy(tmp, arr)
+	sort.Slice(tmp, func(i, j int) bool { return tmp[i] < tmp[j] })
+	if len%2 == 0 {
+		return tmp[len/2]/2 + tmp[len/2+1]/2
+	} else {
+		return tmp[len/2+1]
+	}
 }

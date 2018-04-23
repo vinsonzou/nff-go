@@ -21,7 +21,7 @@
                     "image-name": "nff-go-performance",
                     "app-type": "TestAppGo",
                     "exec-cmd": [
-                        "./latency-part1"
+                        "./latency"
                     ]
                 },
                 {
@@ -33,7 +33,7 @@
                 }
             ]
         },
-		{
+        {
             "name": "latency-test-seq",
             "test-time": 60000000000,
             "test-type": "TestTypeBenchmark",
@@ -42,7 +42,7 @@
                     "image-name": "nff-go-performance",
                     "app-type": "TestAppGo",
                     "exec-cmd": [
-                        "./latency-part1", "-LAT_NUMBER=1000"
+                        "./latency", "-LAT_NUMBER=1000"
                     ]
                 },
                 {
@@ -54,7 +54,7 @@
                 }
             ]
         },
-		{
+        {
             "name": "latency-test-main",
             "test-time": 60000000000,
             "test-type": "TestTypeBenchmark",
@@ -63,7 +63,7 @@
                     "image-name": "nff-go-performance",
                     "app-type": "TestAppGo",
                     "exec-cmd": [
-                        "./latency-part1", "-LAT_NUMBER=1000"
+                        "./latency", "-LAT_NUMBER=1000"
                     ]
                 },
                 {
@@ -77,3 +77,4 @@
         }
     ]
 }
+
