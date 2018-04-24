@@ -77,5 +77,5 @@ fi
 if [ "${port_number}" == 2375 ]
 then
     echo export NFF_GO_HOSTS=${hosts}
-    echo export no_proxy=\$no_proxy,${np_hosts}
+    echo export no_proxy=${np_hosts}
 fi
